@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	// Keep process-level setup here so startup and shutdown remain easy to follow.
 	logger := slog.New(
 		slog.NewJSONHandler(os.Stdout, nil),
 	)
@@ -35,6 +36,7 @@ func main() {
 	)
 	defer stop()
 
+	// Publish readiness only after configuration and server construction succeed.
 	server := health.NewServer(
 		cfg.Name,
 		cfg.Address,
