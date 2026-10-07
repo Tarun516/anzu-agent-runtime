@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:18.0
+    container_name: anzu-postgres
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-anzu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-anzu_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-anzu}
+
+    ports:
+      - "5432:5432"
+    
+    volumes:
+      - anzu_postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-anzu} -d ${POSTGRES_DB:-anzu}"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+    restart: unless-stopped
+
+volumes:
+  anzu_postgres_data:

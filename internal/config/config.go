@@ -19,6 +19,13 @@ type Service struct {
 	ShutdownTimeout time.Duration
 }
 
+// Database contains the configuration required
+// to establish PostgreSQL connections.
+type Database struct {
+	URL            string
+	ConnectTimeout time.Duration
+}
+
 // LoadService loads and validates configuration for a service.
 //
 // The service name is used to construct its environment-variable key.
@@ -74,6 +81,41 @@ func LoadService(
 		ShutdownTimeout: shutdownTimeout,
 	}, nil
 }
+
+
+// LoadDatabase loads and validates PostgreSQL configuration.
+//
+// Local development defaults to the PostgreSQL container
+// exposed on localhost:5432.
+func LoadDatabase()(Database,error) {
+	// 1.Read the database connection string/
+	databaseURL := getEnv(
+		"ANZU_DATABASE_URL",
+		"postgres://anzu:anzu_dev@localhost:5432/anzu?sslmode=disable",
+	)
+
+	// 2. Read the maximum amount of the time allowed
+	// when establishing the initial database connection
+
+	connectTimeout,err := durationFromEnv(
+		"ANZU_DATABASE_CONNECT_TIMEOUT_SECONDS",
+		5*time.Second,
+	)
+
+	// 3. Ensure a connection string is available
+	if err != nil {
+		return Database{},fmt.Errorf(
+			"ANZU_DATABASE_URL cannout be empty",
+		)
+	}
+
+	// 4. Return validated database configuration
+	return Database{
+		URL: 	databaseURL,
+		ConnectTimeout: connectTimeout,
+	}, nil
+}
+
 
 // envName converts a service name into the format
 // used inside environment-variable names.
