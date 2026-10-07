@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"anzu-agent-runtime/internal/config"
-	"anzu-agent-runtime/internal/health"
-	"anzu-agent-runtime/internal/storage"
+	"github.com/Tarun516/anzu-agent-runtime/internal/config"
+	"github.com/Tarun516/anzu-agent-runtime/internal/health"
+	"github.com/Tarun516/anzu-agent-runtime/internal/storage"
 )
 
 // main is the operating-system entrypoint for anzu-realtime.

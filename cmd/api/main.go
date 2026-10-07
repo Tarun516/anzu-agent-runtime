@@ -1,9 +1,9 @@
 package main
 
 import (
-	"anzu-agent-runtime/internal/config"
-	"anzu-agent-runtime/internal/health"
 	"context"
+	"github.com/Tarun516/anzu-agent-runtime/internal/config"
+	"github.com/Tarun516/anzu-agent-runtime/internal/health"
 	"log/slog"
 	"os"
 	"os/signal"

@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Go Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # 1. Download the repository onto the CI machine.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # 2. Install the Go version declared by go.mod.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # 3. Print the toolchain version so failures show
+      # exactly which Go environment was used.
+      - name: Show Go version
+        run: go version
+
+      # 4. Ensure go.mod and go.sum accurately describe
+      # the dependencies used by the source code.
+      - name: Verify module files
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # 5. Reject Go files that have not been formatted
+      # using the canonical gofmt formatter.
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # 6. Run Go's static correctness checks.
+      - name: Vet
+        run: go vet ./...
+
+      # 7. Run the normal unit-test suite.
+      - name: Test
+        run: go test ./...
+
+      # 8. Run tests again with concurrency race detection.
+      - name: Race detector
+        run: go test -race ./...
+
+      # 9. Compile every package and executable.
+      - name: Build
+        run: go build ./...
+
+  migrations:
+    name: Migration Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:18.6
+
+        env:
+          POSTGRES_USER: anzu
+          POSTGRES_PASSWORD: anzu_dev
+          POSTGRES_DB: anzu
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U anzu -d anzu"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # 1. Fetch the repository containing the migration files.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # 2. Install Go so the pinned Goose CLI can be installed.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # 3. Install the migration tool at the version
+      # selected for this repository.
+      - name: Install Goose
+        run: |
+          go install \
+            github.com/pressly/goose/v3/cmd/goose@v3.28.0
+
+      # 4. Apply every migration against a clean PostgreSQL instance.
+      - name: Apply migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: postgres://anzu:anzu_dev@localhost:5432/anzu?sslmode=disable
+          GOOSE_MIGRATION_DIR: ./migrations
+        run: goose up
+
+      # 5. Show the resulting migration state for debugging.
+      - name: Show migration status
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: postgres://anzu:anzu_dev@localhost:5432/anzu?sslmode=disable
+          GOOSE_MIGRATION_DIR: ./migrations
+        run: goose status

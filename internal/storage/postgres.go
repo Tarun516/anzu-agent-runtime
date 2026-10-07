@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"anzu-agent-runtime/internal/config"
+	"github.com/Tarun516/anzu-agent-runtime/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
