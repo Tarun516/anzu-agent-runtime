@@ -82,12 +82,11 @@ func LoadService(
 	}, nil
 }
 
-
 // LoadDatabase loads and validates PostgreSQL configuration.
 //
 // Local development defaults to the PostgreSQL container
 // exposed on localhost:5432.
-func LoadDatabase()(Database,error) {
+func LoadDatabase() (Database, error) {
 	// 1.Read the database connection string/
 	databaseURL := getEnv(
 		"ANZU_DATABASE_URL",
@@ -97,25 +96,24 @@ func LoadDatabase()(Database,error) {
 	// 2. Read the maximum amount of the time allowed
 	// when establishing the initial database connection
 
-	connectTimeout,err := durationFromEnv(
+	connectTimeout, err := durationFromEnv(
 		"ANZU_DATABASE_CONNECT_TIMEOUT_SECONDS",
 		5*time.Second,
 	)
 
 	// 3. Ensure a connection string is available
 	if err != nil {
-		return Database{},fmt.Errorf(
+		return Database{}, fmt.Errorf(
 			"ANZU_DATABASE_URL cannout be empty",
 		)
 	}
 
 	// 4. Return validated database configuration
 	return Database{
-		URL: 	databaseURL,
+		URL:            databaseURL,
 		ConnectTimeout: connectTimeout,
 	}, nil
 }
-
 
 // envName converts a service name into the format
 // used inside environment-variable names.

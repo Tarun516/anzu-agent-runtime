@@ -78,10 +78,9 @@ func run(logger *slog.Logger) error {
 	)
 	defer stop()
 
-
 	// 4. Establish the PostgreSQL connection pool
 	// and verify that the database is reachable.
-	db,err := storage.OpenPostgres(
+	db, err := storage.OpenPostgres(
 		ctx,
 		dbCfg,
 	)

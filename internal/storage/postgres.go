@@ -1,6 +1,5 @@
 package storage
 
-
 import (
 	"context"
 	"fmt"
@@ -27,7 +26,7 @@ type Postgres struct {
 func OpenPostgres(
 	ctx context.Context,
 	cfg config.Database,
-) (*Postgres,error){
+) (*Postgres, error) {
 	// 1. Parse the PostgreSQL connection string
 	// into pgxpool's structured configuration.
 
@@ -38,7 +37,6 @@ func OpenPostgres(
 			err,
 		)
 	}
-
 
 	// 2. Create a bounded context for initial database connection work.
 	// We do not want startup to wait forever if Postgres is unreachable.
@@ -60,12 +58,11 @@ func OpenPostgres(
 		return nil, fmt.Errorf(
 			"create PostgreSQL pool: %w",
 			err,
-		
 		)
 	}
 
 	//4. Verify that a real connection can be established
-	if err := pool.Ping(connectCtx); err != nil{
+	if err := pool.Ping(connectCtx); err != nil {
 		// 5. The pool was already created,so release its
 		// resources before returning the startup error.
 		pool.Close()
@@ -83,7 +80,7 @@ func OpenPostgres(
 	}, nil
 }
 
-func (p *Postgres) Close(){
+func (p *Postgres) Close() {
 	// 1. Close the entire connection pool.
 	p.pool.Close()
 }
