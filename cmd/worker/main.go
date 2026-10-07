@@ -42,6 +42,7 @@ func main() {
 		cfg.Address,
 		cfg.ShutdownTimeout,
 		logger,
+		nil,
 	)
 
 	server.SetReady(true)

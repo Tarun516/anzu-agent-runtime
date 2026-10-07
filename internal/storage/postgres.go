@@ -84,3 +84,9 @@ func (p *Postgres) Close() {
 	// 1. Close the entire connection pool.
 	p.pool.Close()
 }
+
+// Ping verifies that the shared PostgreSQL pool can still
+// obtain a live connection.
+func (p *Postgres) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
+}
