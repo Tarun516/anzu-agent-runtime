@@ -10,7 +10,7 @@ import (
 	"syscall"
 )
 
-// main is the entry point for the AudioSocket echo server.
+// main is the entry point for the AudioSocket echo server,this is what gets connected to the asterisk server for the communication and data transfer.
 //
 // It initializes the TCP listener, accepts incoming connections,
 // and delegates each connection to its own session handler.
