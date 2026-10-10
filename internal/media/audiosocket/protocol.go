@@ -1,3 +1,5 @@
+// Encode/decode the AudioSocket binary protocolj
+
 package audiosocket
 
 import (
