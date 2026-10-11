@@ -2,7 +2,9 @@ package audiosocket
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -138,3 +140,85 @@ func TestWriteFrameUsesSingleWrite(t *testing.T) {
 		t.Fatal("encoded AudioSocket message differs")
 	}
 }
+
+// TestReadFrameRejectsTruncatedHeader verifies that a connection
+// ending midway through the 3-byte header cannot produce a valid frame.
+func TestReadFrameRejectsTruncatedHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "only type byte",
+			data: []byte{TypeAudio},
+		},
+		{
+			name: "type and first length byte",
+			data: []byte{TypeAudio, 0x01},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Simulate the connection ending with a partial header.
+			reader := bytes.NewReader(tc.data)
+
+			// 2. Ask the real decoder to read a complete frame.
+			_, err := ReadFrame(reader)
+
+			// 3. A partially received header must be rejected.
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf(
+					"got error %v, want io.ErrUnexpectedEOF",
+					err,
+				)
+			}
+		})
+	}
+}
+
+// TestReadFrameRejectsOversizedPayload verifies that an untrusted
+// length field cannot make the decoder allocate beyond its safety cap.
+//
+// Only the header is supplied because the decoder should reject
+// the claimed length before attempting to read its payload.
+func TestReadFrameRejectsOversizedPayload(t *testing.T) {
+	cases := []struct {
+		name   string
+		header []byte
+	}{
+		{
+			name:   "one byte above limit",
+			header: []byte{TypeAudio, 0x10, 0x01}, // 4097 bytes
+		},
+		{
+			name:   "maximum encoded length",
+			header: []byte{TypeAudio, 0xFF, 0xFF}, // 65535 bytes
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Supply only the malicious three-byte header.
+			reader := bytes.NewReader(tc.header)
+
+			// 2. Attempt to decode the frame.
+			_, err := ReadFrame(reader)
+
+			// 3. Require a payload-size rejection, not an EOF
+			// caused by trying to read the missing payload.
+			if err == nil || !strings.Contains(
+				err.Error(),
+				"payload too large",
+			) {
+				t.Fatalf(
+					"got error %v, want payload-size rejection",
+					err,
+				)
+			}
+		})
+	}
+}
+
+
+
