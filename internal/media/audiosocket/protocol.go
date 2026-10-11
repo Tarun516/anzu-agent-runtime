@@ -64,25 +64,50 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	return frame, nil
 }
 
+// WriteFrame encodes and sends one complete AudioSocket message.
+//
+// The wire format contains a 3-byte header followed by the payload.
+// We construct both parts in one contiguous buffer before writing.
+//
+// This minimizes fragmentation between the header and payload when
+// communicating with older Asterisk AudioSocket implementations.
+//
+// A single TCP Write does not guarantee a single network packet.
+// writeAll still handles short writes and returns transport errors.
 func WriteFrame(w io.Writer, frame Frame) error {
+	// 1. Validate the message before allocating or sending data.
+	//
+	// The validator enforces supported message types, payload sizes,
+	// and protocol-specific requirements such as even PCM16 lengths.
 	if err := validateFrame(frame); err != nil {
 		return err
 	}
 
-	var header [3]byte
-	header[0] = frame.Type
+	// 2. Allocate enough space for the complete wire message.
+	//
+	// 3 bytes belong to the protocol header.
+	// The remaining bytes contain the message payload.
+	wire := make([]byte, 3+len(frame.Payload))
 
+	// 3. Encode the frame type and big-endian payload length.
+	wire[0] = frame.Type
 	binary.BigEndian.PutUint16(
-		header[1:3],
+		wire[1:3],
 		uint16(len(frame.Payload)),
 	)
 
-	if err := writeAll(w, header[:]); err != nil {
-		return fmt.Errorf("write header: %w", err)
-	}
+	// 4. Copy the payload immediately after the header.
+	//
+	// For a 320-byte audio payload, the resulting message is
+	// 323 bytes, starting with 0x10, 0x01, 0x40.
+	copy(wire[3:], frame.Payload)
 
-	if err := writeAll(w, frame.Payload); err != nil {
-		return fmt.Errorf("write payload: %w", err)
+	// 5. Write the complete message from one buffer.
+	//
+	// When the writer accepts all bytes, writeAll invokes
+	// Write only once. It retries if a short write occurs.
+	if err := writeAll(w, wire); err != nil {
+		return fmt.Errorf("write AudioSocket frame: %w", err)
 	}
 
 	return nil

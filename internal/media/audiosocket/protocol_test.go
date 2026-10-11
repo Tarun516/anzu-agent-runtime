@@ -89,3 +89,52 @@ func TestIncompleteAudio(t *testing.T) {
 		t.Fatal("expected truncated payload error")
 	}
 }
+
+// countingWriter records how many Write calls the encoder makes.
+//
+// Its underlying bytes.Buffer accepts the entire message, allowing
+// the test to verify that WriteFrame does not deliberately split
+// the protocol header and payload into separate writes.
+type countingWriter struct {
+	writes int
+	data   bytes.Buffer
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return w.data.Write(p)
+}
+
+// TestWriteFrameUsesSingleWrite verifies that a complete AudioSocket
+// message is submitted in one Write when the writer accepts all bytes.
+func TestWriteFrameUsesSingleWrite(t *testing.T) {
+	// 1. Construct exactly 20 ms of PCM16 audio.
+	pcm := bytes.Repeat([]byte{0x34, 0x12}, 160)
+
+	writer := &countingWriter{}
+
+	// 2. Encode and submit the message.
+	err := WriteFrame(writer, Frame{
+		Type:    TypeAudio,
+		Payload: pcm,
+	})
+	if err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+
+	// 3. Verify that header and payload were not deliberately
+	// separated into multiple Write calls.
+	if writer.writes != 1 {
+		t.Fatalf("got %d writes, want 1", writer.writes)
+	}
+
+	// 4. Verify the exact message bytes.
+	expected := append(
+		[]byte{0x10, 0x01, 0x40},
+		pcm...,
+	)
+
+	if !bytes.Equal(writer.data.Bytes(), expected) {
+		t.Fatal("encoded AudioSocket message differs")
+	}
+}
