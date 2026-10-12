@@ -49,6 +49,9 @@ func main() {
 	}
 	defer listener.Close()
 
+	// 4. Track all accepted sessions and coordinate their shutdown.
+	manager := newSessionManager()
+
 	// 4. Stop accepting new connections when shutdown begins.
 	//
 	// Accept() is a blocking operation. Cancelling a context
@@ -57,10 +60,14 @@ func main() {
 	// Closing the listener wakes Accept() with an error,
 	// allowing the main goroutine to exit.
 	go func() {
+		// 1. Wait for SIGINT or SIGTERM.
 		<-ctx.Done()
 
-		log.Println("shutdown requested; closing listener")
+		// 2. Reject new sessions before closing the listener.
+		manager.BeginDrain()
+		log.Println("shutdown requested; draining active sessions")
 
+		// 3. Wake the blocked Accept call.
 		if err := listener.Close(); err != nil &&
 			!errors.Is(err, net.ErrClosed) {
 			log.Printf("close listener: %v", err)
@@ -81,7 +88,19 @@ func main() {
 			// Closing the listener during shutdown causes Accept()
 			// to return an error. This is expected behavior.
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				log.Println("AudioSocket listener stopped")
+				// 1. Seal admission before waiting for handlers.
+				manager.BeginDrain()
+
+				// 2. Wait until every admitted session finishes.
+				log.Printf(
+					"listener stopped; waiting for %d active sessions",
+					manager.ActiveCount(),
+				)
+
+				manager.Wait()
+
+				// 3. Exit only after session handlers complete.
+				log.Println("all AudioSocket sessions finished")
 				return
 			}
 
@@ -94,12 +113,18 @@ func main() {
 			continue
 		}
 
-		// 8. Start an independent handler for the new connection.
-		//
-		// Each handler owns its TCP connection and processes
-		// one AudioSocket call session.
-		//
-		// The handler is implemented in session.go.
-		go handleConnection(conn)
+		// 8. Prevent admission if the signal arrived during Accept.
+		if ctx.Err() != nil {
+			manager.BeginDrain()
+		}
+
+		// 9. Register the connection before starting its handler.
+		// Start closes the connection when draining is active.
+		if !manager.Start(conn) {
+			log.Printf(
+				"AudioSocket connection rejected: remote=%s",
+				conn.RemoteAddr(),
+			)
+		}
 	}
 }
