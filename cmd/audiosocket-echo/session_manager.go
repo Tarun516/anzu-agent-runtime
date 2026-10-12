@@ -94,3 +94,39 @@ func (m *sessionManager) ActiveCount() int {
 
 	return len(m.active)
 }
+
+// CloseActive closes the currently registered call connections.
+//
+// This is intended for forced shutdown after BeginDrain.
+// Closing a net.Conn unblocks pending Read and Write operations,
+// allowing each handler to run its deferred cleanup.
+//
+// The manager never reads or writes media through these connections.
+func (m *sessionManager) CloseActive() int {
+	// 1. Take a snapshot of registered connections.
+	//
+	// Holding the mutex prevents concurrent map iteration and
+	// modification by session handler goroutines.
+	m.mu.Lock()
+
+	conns := make([]net.Conn, 0, len(m.active))
+
+	for conn := range m.active {
+		conns = append(conns, conn)
+	}
+
+	m.mu.Unlock()
+
+	// 2. Close connections outside the mutex.
+	//
+	// This avoids holding the registry lock while performing
+	// socket operations. Handlers must be free to unregister.
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+
+	// 3. Report how many connections were targeted.
+	//
+	// This is not a count of confirmed handler completions.
+	return len(conns)
+}

@@ -130,3 +130,68 @@ func TestSessionManagerDrainWaitsForActiveCalls(t *testing.T) {
 		t.Fatalf("active connections = %d, want 0", got)
 	}
 }
+
+// TestSessionManagerCloseActiveUnblocksCall verifies that forced
+// closure releases a session blocked waiting for additional audio.
+//
+// The test owns the client endpoint. The session handler owns
+// the server endpoint, while the manager coordinates shutdown.
+func TestSessionManagerCloseActiveUnblocksCall(t *testing.T) {
+	// 1. Create a manager and a simulated telephone connection.
+	manager := newSessionManager()
+
+	server, client := net.Pipe()
+
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+
+	// 2. Register the session and complete its UUID handshake.
+	if !manager.Start(server) {
+		t.Fatal("session was not admitted")
+	}
+
+	sendSessionUUID(t, client)
+
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+
+	// 3. Begin draining while the call remains active.
+	manager.BeginDrain()
+
+	waitDone := make(chan struct{})
+
+	go func() {
+		manager.Wait()
+		close(waitDone)
+	}()
+
+	// The call has not sent a hangup frame.
+	// Shutdown should still be waiting.
+	select {
+	case <-waitDone:
+		t.Fatal("shutdown completed with an active call")
+	default:
+	}
+
+	// 4. Force-close the registered connection.
+	closed := manager.CloseActive()
+
+	if closed != 1 {
+		t.Fatalf("closed %d connections, want 1", closed)
+	}
+
+	// 5. Verify the blocked handler exits after socket closure.
+	select {
+	case <-waitDone:
+	case <-time.After(sessionTestTimeout):
+		t.Fatal("handler did not exit after forced closure")
+	}
+
+	// 6. Verify there are no registered sessions remaining.
+	if got := manager.ActiveCount(); got != 0 {
+		t.Fatalf("active sessions = %d, want 0", got)
+	}
+}
