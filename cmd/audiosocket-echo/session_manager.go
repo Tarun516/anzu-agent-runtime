@@ -6,24 +6,22 @@ import (
 )
 
 // sessionManager tracks active AudioSocket connections during this
-// process's lifetime 
+// process's lifetime.
 //
-// The manager owns admission and handler tracking
-// Each handleConnection invocation owns and closes its connection
+// The manager owns admission and handler tracking.
+// Each handleConnection invocation owns and closes its connection.
 // The registry is in memory and does not persist call history.
-
-
 type sessionManager struct {
-	mu sync.Mutex
+	mu       sync.Mutex
 	draining bool
-	active map[net.Conn]struct{}
+	active   map[net.Conn]struct{}
 	handlers sync.WaitGroup
 }
 
-// newSessionManager creates an empty registry
-func newSessionManager() *sessionManager{
+// newSessionManager creates an empty registry for active call handlers.
+func newSessionManager() *sessionManager {
 	return &sessionManager{
-		active:make(map[net.Conn]struct{}),
+		active: make(map[net.Conn]struct{}),
 	}
 }
 
@@ -31,60 +29,66 @@ func newSessionManager() *sessionManager{
 //
 // It returns false if draining has started or this connection is
 // already registered. A connection rejected during draining is closed.
-
-func(m *sessionManager) Start(conn net.Conn) bool {
-	// 1. Searilalize admission with shutdown.
+func (m *sessionManager) Start(conn net.Conn) bool {
+	// 1. Serialize admission with shutdown.
 	m.mu.Lock()
 
 	if m.draining {
 		m.mu.Unlock()
-		_= conn.Close()
+		_ = conn.Close()
 		return false
 	}
 
-	if _, exists := m.active[conn]; exists{
+	if _, exists := m.active[conn]; exists {
 		m.mu.Unlock()
-		return  false
+		return false
 	}
 
 	// 2. Register the connection before starting its goroutine.
 	// Add and the draining check use the same lock.
-
 	m.active[conn] = struct{}{}
 	m.handlers.Add(1)
 
 	m.mu.Unlock()
 
-	// 3. Run the existing handler and remove it on completion
-	go func(){
+	// 3. Run the existing handler and remove it on completion.
+	go func() {
 		defer m.handlers.Done()
 
-		defer func(){
+		defer func() {
 			m.mu.Lock()
 			delete(m.active, conn)
 			m.mu.Unlock()
 		}()
+
 		handleConnection(conn)
 	}()
 
 	return true
 }
 
-// BigEndian until all previously admitted handlers have excited.
+// BeginDrain permanently disables new session admission.
 //
-// BeginDrain must be called before wait so no new handlers can
+// Calling it more than once is safe. Existing sessions continue.
+func (m *sessionManager) BeginDrain() {
+	// 1. Change admission state under the same lock used by Start.
+	m.mu.Lock()
+	m.draining = true
+	m.mu.Unlock()
+}
+
+// Wait blocks until all previously admitted handlers have exited.
+//
+// BeginDrain must be called before Wait so no new handlers can
 // be registered while shutdown waits for completion.
-
-func(m *sessionManager)Wait(){
+func (m *sessionManager) Wait() {
 	m.handlers.Wait()
-
 }
 
 // ActiveCount reports the number of currently tracked connections.
 //
 // The count is a local snapshot, not a durable or global call count.
-
-func(m *sessionManager) ActiveCount() int {
+func (m *sessionManager) ActiveCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -65,7 +66,7 @@ func TestSessionManagerDrainWaitsForActiveCalls(t *testing.T) {
 	// Confirm that the rejected connection was closed.
 	if err := clientC.SetReadDeadline(
 		time.Now().Add(sessionTestTimeout),
-	); err != nil {
+	); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("set rejected client deadline: %v", err)
 	}
 
