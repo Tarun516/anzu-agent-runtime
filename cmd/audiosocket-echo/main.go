@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 // main is the entry point for the AudioSocket echo server,this is what gets connected to the asterisk server for the communication and data transfer.
@@ -97,10 +98,25 @@ func main() {
 					manager.ActiveCount(),
 				)
 
-				manager.Wait()
+				// 3. Allow active sessions to complete naturally, then
+				// force-close any remaining connections after the grace period.
+				//
+				// These are development defaults. The total shutdown budget
+				// must eventually fit the process manager's termination window.
+				const shutdownGracePeriod = 30 * time.Second
+				const shutdownCleanupTimeout = 5 * time.Second
 
-				// 3. Exit only after session handlers complete.
-				log.Println("all AudioSocket sessions finished")
+				if err := drainSessions(
+					manager,
+					shutdownGracePeriod,
+					shutdownCleanupTimeout,
+				); err != nil {
+					log.Printf("AudioSocket shutdown incomplete: %v", err)
+					return
+				}
+
+				// 4. Every registered handler has finished.
+				log.Println("AudioSocket shutdown complete")
 				return
 			}
 
