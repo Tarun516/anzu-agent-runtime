@@ -1,4 +1,5 @@
-// Encode/decode the AudioSocket binary protocolj
+// Encode/decode the AudioSocket binary protocol
+// Reusable AudioSocket frame encoding, decoding and validation
 
 package audiosocket
 
