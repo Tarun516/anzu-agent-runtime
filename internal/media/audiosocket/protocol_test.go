@@ -219,6 +219,3 @@ func TestReadFrameRejectsOversizedPayload(t *testing.T) {
 		})
 	}
 }
-
-
-
