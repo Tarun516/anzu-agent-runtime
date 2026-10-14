@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -491,5 +492,106 @@ func TestRunReturnsWhenContextIsCancelled(t *testing.T) {
 			"expected graceful shutdown, got error: %v",
 			err,
 		)
+	}
+}
+
+func TestRunReportsOccupiedHTTPPort(t *testing.T) {
+	// 1. Occupy an available local TCP port.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	// 2. Configure the health server to use that port.
+	server := NewServer(
+		"realtime",
+		occupied.Addr().String(),
+		time.Second,
+		newTestLogger(),
+		nil,
+	)
+
+	// 3. The port is already occupied, so Run must fail
+	// immediately rather than starting a broken server.
+	err = server.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected HTTP bind failure")
+	}
+}
+
+func TestRunOnListenerServesAndStops(t *testing.T) {
+	// 1. Bind an available local TCP port ourselves.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// 2. Construct the health server.
+	server := NewServer(
+		"realtime",
+		listener.Addr().String(),
+		time.Second,
+		newTestLogger(),
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 3. Start HTTP using our already-bound listener.
+	done := make(chan error, 1)
+
+	go func() {
+		done <- server.RunOnListener(ctx, listener)
+	}()
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	defer client.CloseIdleConnections()
+
+	baseURL := "http://" + listener.Addr().String()
+
+	// Helper to make a real HTTP request and check its status.
+	checkStatus := func(path string, want int) {
+		t.Helper()
+
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != want {
+			t.Fatalf(
+				"%s: got HTTP %d, want %d",
+				path,
+				resp.StatusCode,
+				want,
+			)
+		}
+	}
+
+	// 4. Liveness works, but readiness starts closed.
+	checkStatus("/healthz", http.StatusOK)
+	checkStatus("/readyz", http.StatusServiceUnavailable)
+
+	// 5. Once the parent opens readiness, it returns 200.
+	server.SetReady(true)
+	checkStatus("/readyz", http.StatusOK)
+
+	// 6. Cancel the parent lifecycle.
+	cancel()
+
+	// 7. The HTTP server must shut down successfully.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("HTTP shutdown failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP server did not stop")
 	}
 }

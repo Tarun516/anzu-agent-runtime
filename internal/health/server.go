@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -88,23 +89,56 @@ func (s *Server) SetReady(ready bool) {
 	s.ready.Store(ready)
 }
 
-// Run starts the health HTTP server and waits until either
-// the server stops or the application context is cancelled.
+// Run preserves the existing standalone HTTP behavior.
+// Binding now happens synchronously, so port errors are
+// returned before the HTTP serving goroutine starts.
 func (s *Server) Run(ctx context.Context) error {
-	// 1. Create a one-result channel for the HTTP server's
-	// terminal result.
+	listener, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		s.SetReady(false)
+		return fmt.Errorf(
+			"bind health HTTP listener %q: %w",
+			s.server.Addr,
+			err,
+		)
+	}
+
+	return s.RunOnListener(ctx, listener)
+}
+
+// RunOnListener serves HTTP on a listener already bound
+// by the caller.
+//
+// Ownership of the listener transfers to this method.
+// The caller must not independently close it while serving,
+// except as part of an explicitly coordinated shutdown.
+func (s *Server) RunOnListener(
+	ctx context.Context,
+	listener net.Listener,
+) error {
+	if listener == nil {
+		s.SetReady(false)
+		return errors.New("health HTTP listener is nil")
+	}
+
+	defer listener.Close()
+
 	errCh := make(chan error, 1)
 
-	// 2. Start the blocking HTTP server concurrently.
+	// Serve accepts HTTP connections using the socket that
+	// was already bound by the parent.
 	go func() {
-		errCh <- s.server.ListenAndServe()
+		errCh <- s.server.Serve(listener)
 	}()
 
-	// 3. Wait for server termination or application cancellation.
 	select {
 	case err := <-errCh:
-		// 4. ErrServerClosed is expected during normal shutdown.
-		if errors.Is(err, http.ErrServerClosed) {
+		s.SetReady(false)
+
+		// ErrServerClosed is expected only when the parent
+		// has requested shutdown.
+		if errors.Is(err, http.ErrServerClosed) &&
+			ctx.Err() != nil {
 			return nil
 		}
 
@@ -114,28 +148,23 @@ func (s *Server) Run(ctx context.Context) error {
 		)
 
 	case <-ctx.Done():
-		// 5. Stop advertising lifecycle readiness immediately.
+		// Stop advertising readiness before HTTP shutdown.
 		s.SetReady(false)
 
-		// 6. Give HTTP cleanup its own bounded context.
-		//
-		// The root application context is already cancelled,
-		// so shutdown needs an independent timeout context.
+		// The root context is already cancelled, so HTTP
+		// cleanup needs a fresh, bounded context.
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(),
 			s.shutdownTimeout,
 		)
 		defer cancel()
 
-		// 7. Record the shutdown transition.
 		s.logger.Info(
 			"shutting down health server",
 			"service",
 			s.name,
 		)
 
-		// 8. Stop accepting new requests and allow active
-		// requests time to finish.
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf(
 				"shutdown health HTTP server: %w",
