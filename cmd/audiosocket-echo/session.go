@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -12,7 +11,7 @@ import (
 const (
 	initialFrameTimeout = echo.InitialFrameTimeout
 	idleReadTimeout     = echo.IdleReadTimeout
-	frameWriteTimeout  = echo.FrameWriteTimeout
+	frameWriteTimeout   = echo.FrameWriteTimeout
 )
 
 // Preserve the lab's existing handler interface.
