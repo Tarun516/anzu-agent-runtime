@@ -31,6 +31,19 @@ const (
 // The function owns this connection. Other call handlers must not
 // read from or write to the same connection.
 func HandleConnection(conn net.Conn) {
+	handleConnection(conn, nil)
+}
+
+// audioObserver receives a copy of call audio without owning the socket.
+// Observer failures must never prevent the primary echo path from running.
+type audioObserver interface {
+	FeedAudio(payload []byte) error
+	End(normal bool)
+}
+
+type observerFactory func(callID string) (audioObserver, error)
+
+func handleConnection(conn net.Conn, newObserver observerFactory) {
 	// 1. Release the connection whenever this handler returns.
 	// This includes normal hangup, EOF, malformed data and timeouts.
 	defer conn.Close()
@@ -73,6 +86,19 @@ func HandleConnection(conn net.Conn) {
 
 	// ReadFrame already validates the UUID's 16-byte length.
 	callID := FormatCallUUID(first.Payload)
+	var observer audioObserver
+	observerNormal := false
+	observerFeeding := true
+	if newObserver != nil {
+		observer, err = newObserver(callID)
+		if err != nil {
+			log.Printf("audio observer unavailable: uuid=%s error=%v", callID, err)
+			observer = nil
+		}
+	}
+	if observer != nil {
+		defer func() { observer.End(observerNormal) }()
+	}
 
 	log.Printf(
 		"call started: uuid=%s remote=%s",
@@ -131,6 +157,12 @@ func HandleConnection(conn net.Conn) {
 		// 7. Dispatch by application-level message type.
 		switch frame.Type {
 		case audiosocket.TypeAudio:
+			if observer != nil && observerFeeding {
+				if err := observer.FeedAudio(frame.Payload); err != nil {
+					log.Printf("audio observer failed: uuid=%s error=%v", callID, err)
+					observerFeeding = false
+				}
+			}
 			// Echo the original PCM bytes without decoding,
 			// resampling or changing their representation.
 			//
@@ -175,6 +207,7 @@ func HandleConnection(conn net.Conn) {
 			// Asterisk has signaled connection termination.
 			// Returning triggers deferred socket cleanup.
 			log.Printf("hangup received: uuid=%s", callID)
+			observerNormal = true
 			return
 
 		case audiosocket.TypeError:

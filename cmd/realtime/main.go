@@ -6,12 +6,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/Tarun516/anzu-agent-runtime/internal/config"
 	"github.com/Tarun516/anzu-agent-runtime/internal/health"
 	"github.com/Tarun516/anzu-agent-runtime/internal/media/audiosocket/echo"
 	"github.com/Tarun516/anzu-agent-runtime/internal/media/audiosocket/session"
+	"github.com/Tarun516/anzu-agent-runtime/internal/speech/stt/deepgram"
+	"github.com/Tarun516/anzu-agent-runtime/internal/speech/stt/deepgram/gorilla"
 	"github.com/Tarun516/anzu-agent-runtime/internal/storage"
 )
 
@@ -103,19 +107,88 @@ func run(logger *slog.Logger) error {
 		},
 	)
 
-	// 7. Create the AudioSocket session manager.
-	// Each admitted TCP connection will be processed
-	// by the existing reusable echo handler.
-	manager, err := session.NewManager(
-		echo.HandleConnection,
-	)
+	// 7. Select the existing echo-only handler by default.
+	// Explicit opt-in enables a separate 16-kHz shadow consumer while the
+	// ORIGINAL 8-kHz PCM is still written back to Asterisk.
+	handler := session.Handler(echo.HandleConnection)
+	shadowFlag := os.Getenv("ANZU_AUDIO_SHADOW")
+	if shadowFlag != "" {
+		enabled, parseErr := strconv.ParseBool(shadowFlag)
+		if parseErr != nil {
+			return fmt.Errorf("ANZU_AUDIO_SHADOW must be a boolean: %w", parseErr)
+		}
+		if enabled {
+			handler, err = echo.NewShadowHandler(echo.ShadowConfig{
+				MaxFrames:    10,
+				MaxBuffered:  200 * time.Millisecond,
+				DrainTimeout: 2 * time.Second,
+			})
+			if err != nil {
+				return fmt.Errorf("initialize audio shadow pipeline: %w", err)
+			}
+			logger.Info("audio shadow pipeline enabled", "mode", "echo plus test consumer", "rate_hz", 16000)
+		}
+	}
+
+	// CP4.3: opt-in real STT observer. Never enable implicitly just because
+	// DEEPGRAM_API_KEY is present: this sends call audio to an external service.
+	sttFlag := os.Getenv("ANZU_AUDIO_STT")
+	if sttFlag != "" {
+		enabled, parseErr := strconv.ParseBool(sttFlag)
+		if parseErr != nil {
+			return fmt.Errorf("ANZU_AUDIO_STT must be boolean: %w", parseErr)
+		}
+		if enabled {
+			if shadowFlag != "" {
+				shadowEnabled, _ := strconv.ParseBool(shadowFlag)
+				if shadowEnabled {
+					return fmt.Errorf("ANZU_AUDIO_STT and ANZU_AUDIO_SHADOW cannot both be true")
+				}
+			}
+			logText := false
+			if raw := os.Getenv("ANZU_STT_LOG_TEXT"); raw != "" {
+				logText, err = strconv.ParseBool(raw)
+				if err != nil {
+					return fmt.Errorf("ANZU_STT_LOG_TEXT must be boolean: %w", err)
+				}
+			}
+			provider, providerErr := deepgram.New(deepgram.Config{
+				APIKey: os.Getenv("DEEPGRAM_API_KEY"),
+				Model:  "nova-3",
+				Dialer: gorilla.Dialer{},
+			})
+			if providerErr != nil {
+				return fmt.Errorf("initialize Deepgram: %w", providerErr)
+			}
+			language := os.Getenv("ANZU_STT_LANGUAGE")
+			if language == "" {
+				language = "en-IN"
+			}
+			handler, err = echo.NewSTTShadowHandler(echo.STTShadowConfig{
+				Provider:      provider,
+				Language:      language,
+				QueueFrames:   10,
+				QueueDuration: 200 * time.Millisecond,
+				DrainTimeout:  8 * time.Second,
+				FinishTimeout: 6 * time.Second,
+				LogText:       logText,
+			})
+			if err != nil {
+				return fmt.Errorf("initialize STT observer: %w", err)
+			}
+			logger.Info("STT observation mode enabled", "rate_hz", 16000, "transcript_text_logging", logText)
+		}
+	}
+
+	// 8. Create the AudioSocket session manager.
+	manager, err := session.NewManager(handler)
 	if err != nil {
 		return fmt.Errorf(
 			"create AudioSocket session manager: %w", err,
 		)
 	}
 
-	// 8. Bind both listening sockets before serving.
+	// 9. Bind both listening sockets before serving.
 	// If AudioSocket binding fails, bindListeners
 	// releases the HTTP listener automatically.
 	listeners, err := bindListeners(
@@ -140,14 +213,9 @@ func run(logger *slog.Logger) error {
 		)
 	}
 
-	// 9. Supervise both servers.
-	// The supervisor handles:
-	// - concurrent serving
-	// - application readiness
-	// - shutdown signals
-	// - unexpected server failures
-	// - active session draining
-	// - listener cleanup
+	// 10. Supervise both servers.
+	// The supervisor handles concurrent serving, readiness, unexpected
+	// failures, active-session draining and listener cleanup.
 	if err := superviseListeners(
 		ctx,
 		server,
@@ -160,7 +228,7 @@ func run(logger *slog.Logger) error {
 		)
 	}
 
-	// 10. Both servers stopped successfully.
+	// 11. Both servers stopped successfully.
 	logger.Info(
 		"realtime service stopped",
 		"service", cfg.Name,
